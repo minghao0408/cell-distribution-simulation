@@ -1,13 +1,63 @@
-This example demonstrates the generation and visualization of a constrained cell distribution model with two distinct cell types. The key features are:
+# Cell Distribution Simulation
 
-1. Binary Mask: A 100x100 boolean array is created, with a central 20x20 region set as a "forbidden zone" where cells cannot be placed.
+This project simulates the distribution of different cell types based on spatial interactions and environmental constraints.
 
-2. Cell Generation: Two types of cells are generated, 50 of each type. Each cell type follows a different spatial distribution:
-   - Type 1: Normal distribution with mean -1 and standard deviation 0.5 for both x and y coordinates.
-   - Type 2: Normal distribution with mean 1 and standard deviation 0.5 for both x and y coordinates.
+## Description
 
-3. Spatial Constraints: Cells are only placed in areas allowed by the binary mask, and a minimum distance of 0.2 is maintained between all cells.
+This simulation generates cell centers for multiple cell types, taking into account:
+- Spatial distributions for each cell type
+- Interactions between different cell types
+- Environmental constraints (represented by a binary mask)
+- Minimum distance between cells
 
-4. Visualization: The results are plotted on a 10x10 inch figure. The binary mask is displayed as a background, with the forbidden zone visible. The two cell types are represented by scatter plots of different colors, clearly showing their distinct spatial distributions.
-5. This model simulates a scenario where different cell types have varying spatial preferences and certain areas are restricted for cell placement. 
-The example showcases the flexibility of the `generate_cell_centers` function, which can handle multiple cell types with different distributions while respecting spatial constraints defined by a binary mask.
+The program also estimates the interaction matrix based on the generated cell distribution and visualizes the results.
+
+## Features
+
+- Generate cell distributions based on configurable parameters
+- Estimate interaction matrices from cell distributions
+- Visualize cell distributions and forbidden regions
+- Configurable simulation parameters
+- Unit tests to ensure code reliability
+
+## Installation
+
+1. Clone this repository: git clone https://github.com/minghao0408/cell-distribution-simulation.git   
+2. Navigate to the project directory: cd cell-distribution-simulation
+3. Install the required packages: pip install numpy scipy matplotlib
+
+## Usage
+
+To run the simulation: python main.py
+This will run the unit tests and then execute the simulation, displaying the results.
+
+## Configuration
+
+You can modify the simulation parameters in the `config.py` file. Available parameters include:
+
+- `mask_size`: Size of the simulation area
+- `forbidden_region`: Coordinates of the forbidden region
+- `cell_counts`: Number of cells for each type
+- `x_distributions` and `y_distributions`: Spatial distributions for cell placement
+- `interaction_matrix`: Matrix defining interactions between cell types
+- `min_distance`: Minimum allowed distance between cells
+
+## Project Structure
+
+- `main.py`: Entry point of the program
+- `config.py`: Configuration parameters
+- `simulation.py`: Core simulation logic
+- `test_simulation.py`: Unit tests
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- This project was inspired by biological cell distribution patterns
+- Thanks to the SciPy and Matplotlib communities for their excellent libraries
