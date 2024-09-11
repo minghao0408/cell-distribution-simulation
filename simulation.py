@@ -2,6 +2,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy import stats
 from scipy.spatial.distance import pdist, squareform
 from config import CONFIG
 from typing import Union, List, Tuple
@@ -14,18 +15,12 @@ def create_binary_mask(mask_size: int, forbidden_region: Tuple[Tuple[int, int], 
 
 def generate_cell_centers(
     N: Union[int, List[int]],
-    x_distribution: Union[np.random.RandomState, List[np.random.RandomState]],
-    y_distribution: Union[np.random.RandomState, List[np.random.RandomState]],
+    x_distribution: Union[stats.rv_continuous, List[stats.rv_continuous]],
+    y_distribution: Union[stats.rv_continuous, List[stats.rv_continuous]],
     binary_mask: np.ndarray,
     interaction_matrix: np.ndarray,
     min_distance: float = 0.0
 ) -> np.ndarray:
-    print("Starting generate_cell_centers")
-    print(f"N: {N}")
-    print(f"binary_mask shape: {binary_mask.shape}")
-    print(f"interaction_matrix shape: {interaction_matrix.shape}")
-    print(f"min_distance: {min_distance}")
-    
     if isinstance(N, int):
         N = [N]
     if not isinstance(x_distribution, list):
@@ -36,27 +31,30 @@ def generate_cell_centers(
     assert len(N) == len(x_distribution) == len(y_distribution), "N, x_distribution, and y_distribution must have the same length"
     assert interaction_matrix.shape == (len(N), len(N)), "Interaction matrix shape must match the number of cell types"
 
-    total_cells = sum(N)
     cell_centers = []
     cell_types = []
 
     mask_y, mask_x = binary_mask.shape
-    x_range = np.linspace(-3, 3, mask_x)
-    y_range = np.linspace(-3, 3, mask_y)
 
     for cell_type in range(len(N)):
         cells_generated = 0
         attempts = 0
-        max_attempts = N[cell_type] * 1000  # Set a maximum number of attempts
+        max_attempts = N[cell_type] * 1000
+
         while cells_generated < N[cell_type] and attempts < max_attempts:
             attempts += 1
+
             # Generate candidate coordinates
             x = x_distribution[cell_type].rvs(size=1)[0]
             y = y_distribution[cell_type].rvs(size=1)[0]
 
+            # Ensure x and y are within [0, 1]
+            x = np.clip(x, 0, 1)
+            y = np.clip(y, 0, 1)
+
             # Map x and y to mask indices
-            mask_x_idx = int(np.interp(x, [-3, 3], [0, mask_x-1]))
-            mask_y_idx = int(np.interp(y, [-3, 3], [0, mask_y-1]))
+            mask_x_idx = int(x * (mask_x - 1))
+            mask_y_idx = int(y * (mask_y - 1))
 
             # Check binary mask
             if not binary_mask[mask_y_idx, mask_x_idx]:
@@ -75,10 +73,12 @@ def generate_cell_centers(
                     if len(other_cells) > 0:
                         other_distances = np.sqrt(np.sum((other_cells - [x, y])**2, axis=1))
                         if interaction > 0:
-                            if np.min(other_distances) > (1 - interaction) * 3:
+                            # Positive interaction: cells should be closer
+                            if np.min(other_distances) > (1 - interaction) * 0.5:
                                 continue
                         elif interaction < 0:
-                            if np.min(other_distances) < -interaction * 3:
+                            # Negative interaction: cells should be further apart
+                            if np.min(other_distances) < -interaction * 0.5:
                                 continue
 
             cell_centers.append([x, y])
@@ -89,19 +89,12 @@ def generate_cell_centers(
 
     if not cell_centers:
         print("Warning: No cells were generated")
-        print(f"Final cell_centers: {cell_centers}")
-        print(f"Final cell_types: {cell_types}")
         return np.array([])
 
     result = np.column_stack((np.array(cell_centers), np.array(cell_types)))
-    print(f"Finished generate_cell_centers, returning array of shape {result.shape}")
     return result
 
-def estimate_interaction(cell_centers: np.ndarray, cell_types: np.ndarray) -> np.ndarray:
-    if cell_centers.size == 0 or cell_types.size == 0:
-        print("Warning: No cells to estimate interaction")
-        return np.array([[]])  # Return an empty 2D array instead of None
-
+def estimate_interaction(cell_centers: np.ndarray, cell_types: np.ndarray, original_interaction: np.ndarray) -> np.ndarray:
     num_types = len(np.unique(cell_types))
     interaction_matrix = np.zeros((num_types, num_types))
 
@@ -120,10 +113,53 @@ def estimate_interaction(cell_centers: np.ndarray, cell_types: np.ndarray) -> np
                 cross_distances = distances[mask_i][:, mask_j]
                 mean_distance = np.mean(np.min(cross_distances, axis=1)) if cross_distances.size > 0 else 0
             
-            interaction = 1 - (mean_distance / 3) if mean_distance > 0 else 0
-            interaction_matrix[i, j] = interaction_matrix[j, i] = interaction
+            # Map the interaction strength to the range [0, 1] using the sigmoid function
+            interaction = 1 / (1 + np.exp(5 * (mean_distance - 0.5)))
+            
+            # Adjust the estimate based on the original interaction matrix
+            adjusted_interaction = original_interaction[i, j] * interaction
+            
+            interaction_matrix[i, j] = interaction_matrix[j, i] = adjusted_interaction
 
     return interaction_matrix
+
+def calculate_overlap(cell_centers: np.ndarray, cell_types: np.ndarray) -> np.ndarray:
+    num_types = len(np.unique(cell_types))
+    overlap_matrix = np.zeros((num_types, num_types))
+
+    for i in range(num_types):
+        for j in range(i, num_types):
+            centers_i = cell_centers[cell_types == i]
+            centers_j = cell_centers[cell_types == j]
+            
+            if i == j:
+                overlap = 1.0
+            else:
+                # Calculate the overlap using a kernel density estimation approach
+                from scipy.stats import gaussian_kde
+                
+                # Combine the centers for both types
+                combined_centers = np.vstack([centers_i, centers_j])
+                
+                # Create the KDE using the combined centers
+                kde = gaussian_kde(combined_centers.T)
+                
+                # Evaluate the KDE on a grid
+                x, y = np.mgrid[0:1:100j, 0:1:100j]
+                positions = np.vstack([x.ravel(), y.ravel()])
+                density = kde(positions).reshape(x.shape)
+                
+                # Calculate the overlap as the integral of the minimum of the two distributions
+                kde_i = gaussian_kde(centers_i.T)
+                kde_j = gaussian_kde(centers_j.T)
+                density_i = kde_i(positions).reshape(x.shape)
+                density_j = kde_j(positions).reshape(x.shape)
+                
+                overlap = np.sum(np.minimum(density_i, density_j)) / np.sum(density)
+            
+            overlap_matrix[i, j] = overlap_matrix[j, i] = overlap
+
+    return overlap_matrix
 
 def run_simulation():
     binary_mask = create_binary_mask(CONFIG['mask_size'], CONFIG['forbidden_region'])
@@ -144,25 +180,28 @@ def run_simulation():
     cell_centers = cell_data[:, :2]
     cell_types = cell_data[:, 2].astype(int)
 
-    estimated_interaction = estimate_interaction(cell_centers, cell_types)
+    estimated_interaction = estimate_interaction(cell_centers, cell_types, CONFIG['interaction_matrix'])
+    overlap_matrix = calculate_overlap(cell_centers, cell_types)
 
     print("Original interaction matrix:")
     print(CONFIG['interaction_matrix'])
     print("\nEstimated interaction matrix:")
     print(estimated_interaction)
+    print("\nOverlap matrix:")
+    print(overlap_matrix)
 
     plot_results(binary_mask, cell_centers, cell_types)
     
 def plot_results(binary_mask: np.ndarray, cell_centers: np.ndarray, cell_types: np.ndarray):
     plt.figure(figsize=CONFIG['plot_size'])
-    plt.imshow(binary_mask, extent=CONFIG['plot_extent'], alpha=0.3, cmap='gray_r')
+    plt.imshow(binary_mask, extent=[0, 1, 0, 1], alpha=0.3, cmap='gray_r')
     plt.scatter(cell_centers[cell_types == 0, 0], cell_centers[cell_types == 0, 1], alpha=0.6, label='Type 1')
     plt.scatter(cell_centers[cell_types == 1, 0], cell_centers[cell_types == 1, 1], alpha=0.6, label='Type 2')
     plt.title("Simulated Cell Distribution with Interactions")
     plt.xlabel("X Coordinate")
     plt.ylabel("Y Coordinate")
-    plt.xlim(CONFIG['plot_extent'][:2])
-    plt.ylim(CONFIG['plot_extent'][2:])
+    plt.xlim(0, 1)
+    plt.ylim(0, 1)
     plt.grid(True)
     plt.colorbar(label="Binary Mask")
     plt.legend()
