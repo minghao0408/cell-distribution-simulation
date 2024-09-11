@@ -28,10 +28,10 @@ class TestSimulation(unittest.TestCase):
 
     def test_estimate_interaction(self):
         # Generate some mock data
-        cell_centers = np.random.rand(100, 2) * 6 - 3  # Range from -3 to 3
+        cell_centers = np.random.rand(100, 2)  # Range from 0 to 1
         cell_types = np.random.randint(0, 2, 100)
         
-        estimated_interaction = estimate_interaction(cell_centers, cell_types)
+        estimated_interaction = estimate_interaction(cell_centers, cell_types, CONFIG['interaction_matrix'])
         self.assertIsInstance(estimated_interaction, np.ndarray)
         if estimated_interaction.size > 0:
             self.assertEqual(estimated_interaction.shape, (2, 2))
