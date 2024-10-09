@@ -4,8 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
 from scipy.spatial.distance import pdist, squareform
-from config import CONFIG
-from typing import Union, List, Tuple
+from typing import Union, List, Tuple, Optional
+from matplotlib.patches import Circle
+from scipy.spatial.distance import cdist
 
 def create_binary_mask(mask_size: int, forbidden_region: Tuple[Tuple[int, int], Tuple[int, int]]) -> np.ndarray:
     mask = np.ones((mask_size, mask_size), dtype=bool)
@@ -44,40 +45,32 @@ def generate_cell_centers(
         while cells_generated < N[cell_type] and attempts < max_attempts:
             attempts += 1
 
-            # Generate candidate coordinates
             x = x_distribution[cell_type].rvs(size=1)[0]
             y = y_distribution[cell_type].rvs(size=1)[0]
 
-            # Ensure x and y are within [0, 1]
             x = np.clip(x, 0, 1)
             y = np.clip(y, 0, 1)
 
-            # Map x and y to mask indices
             mask_x_idx = int(x * (mask_x - 1))
             mask_y_idx = int(y * (mask_y - 1))
 
-            # Check binary mask
             if not binary_mask[mask_y_idx, mask_x_idx]:
                 continue
 
-            # Check minimum distance and apply interaction
             if cell_centers:
                 distances = np.sqrt(np.sum((np.array(cell_centers) - [x, y])**2, axis=1))
                 if np.min(distances) < min_distance:
                     continue
 
-                # Apply interaction
                 for other_type in range(len(N)):
                     interaction = interaction_matrix[cell_type, other_type]
                     other_cells = np.array([c for c, t in zip(cell_centers, cell_types) if t == other_type])
                     if len(other_cells) > 0:
                         other_distances = np.sqrt(np.sum((other_cells - [x, y])**2, axis=1))
                         if interaction > 0:
-                            # Positive interaction: cells should be closer
                             if np.min(other_distances) > (1 - interaction) * 0.5:
                                 continue
                         elif interaction < 0:
-                            # Negative interaction: cells should be further apart
                             if np.min(other_distances) < -interaction * 0.5:
                                 continue
 
@@ -113,10 +106,8 @@ def estimate_interaction(cell_centers: np.ndarray, cell_types: np.ndarray, origi
                 cross_distances = distances[mask_i][:, mask_j]
                 mean_distance = np.mean(np.min(cross_distances, axis=1)) if cross_distances.size > 0 else 0
             
-            # Map the interaction strength to the range [0, 1] using the sigmoid function
             interaction = 1 / (1 + np.exp(5 * (mean_distance - 0.5)))
             
-            # Adjust the estimate based on the original interaction matrix
             adjusted_interaction = original_interaction[i, j] * interaction
             
             interaction_matrix[i, j] = interaction_matrix[j, i] = adjusted_interaction
@@ -135,21 +126,16 @@ def calculate_overlap(cell_centers: np.ndarray, cell_types: np.ndarray) -> np.nd
             if i == j:
                 overlap = 1.0
             else:
-                # Calculate the overlap using a kernel density estimation approach
                 from scipy.stats import gaussian_kde
                 
-                # Combine the centers for both types
                 combined_centers = np.vstack([centers_i, centers_j])
                 
-                # Create the KDE using the combined centers
                 kde = gaussian_kde(combined_centers.T)
                 
-                # Evaluate the KDE on a grid
                 x, y = np.mgrid[0:1:100j, 0:1:100j]
                 positions = np.vstack([x.ravel(), y.ravel()])
                 density = kde(positions).reshape(x.shape)
                 
-                # Calculate the overlap as the integral of the minimum of the two distributions
                 kde_i = gaussian_kde(centers_i.T)
                 kde_j = gaussian_kde(centers_j.T)
                 density_i = kde_i(positions).reshape(x.shape)
@@ -161,16 +147,114 @@ def calculate_overlap(cell_centers: np.ndarray, cell_types: np.ndarray) -> np.nd
 
     return overlap_matrix
 
-def run_simulation():
-    binary_mask = create_binary_mask(CONFIG['mask_size'], CONFIG['forbidden_region'])
+def simulate_cell_distribution(
+    x_distribution,
+    y_distribution,
+    cell_count,
+    allowed_region,
+    cell_interaction_radius,
+    forbidden_region=None,
+    cell_radius=None,
+    show_plots=False
+):
+    grid_size = allowed_region.shape[0]
+    cells = []
+    
+    # Generate cells
+    while len(cells) < cell_count:
+        x = x_distribution.rvs()
+        y = y_distribution.rvs()
+        
+        # Ensure x and y are within [0, 1] range
+        x = np.clip(x, 0, 1)
+        y = np.clip(y, 0, 1)
+        
+        # Convert to grid indices
+        x_idx = min(int(x * grid_size), grid_size - 1)
+        y_idx = min(int(y * grid_size), grid_size - 1)
+        
+        if allowed_region[y_idx, x_idx] and (forbidden_region is None or not forbidden_region[y_idx, x_idx]):
+            if cell_radius is None or not any(np.hypot(x - cx, y - cy) < cell_radius for cx, cy in cells):
+                cells.append((x, y))
+    
+    cells = np.array(cells)
+    
+    # Create interaction map
+    interaction_map = np.zeros_like(allowed_region, dtype=int)
+    y_indices, x_indices = np.ogrid[:grid_size, :grid_size]
+    for cell in cells:
+        distances = np.hypot(x_indices/grid_size - cell[0], y_indices/grid_size - cell[1])
+        interaction_map += (distances <= cell_interaction_radius)
+    
+    # Apply allowed region mask
+    if forbidden_region is not None:
+        allowed_region = allowed_region & ~forbidden_region
+    interaction_map *= allowed_region
+    
+    # Calculate statistics
+    pixels_covered_0 = np.sum(interaction_map == 0)
+    pixels_covered_1 = np.sum(interaction_map == 1)
+    pixels_covered_2_plus = np.sum(interaction_map >= 2)
+    total_pixels = np.sum(allowed_region)
+    pixels_covered_2_plus_not_forbidden = pixels_covered_2_plus
+    
+    # Plotting
+    if show_plots:
+        plt.figure(figsize=(10, 10))
+        plt.imshow(interaction_map, cmap='viridis', interpolation='nearest', extent=[0, 1, 0, 1])
+        plt.colorbar(label='Interaction count')
+        
+        for cell in cells:
+            plt.scatter(cell[0], cell[1], color='red', s=20)
+            circle = Circle(cell, cell_interaction_radius, fill=False, color='r')
+            plt.gca().add_artist(circle)
+        
+        if forbidden_region is not None:
+            plt.imshow(forbidden_region, cmap='Reds', alpha=0.3, extent=[0, 1, 0, 1])
+        
+        plt.title('Cell Distribution Simulation')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.show()
+    
+    return (
+        pixels_covered_0,
+        pixels_covered_1,
+        pixels_covered_2_plus,
+        total_pixels,
+        pixels_covered_2_plus_not_forbidden,
+        total_pixels
+    )
+def run_simulation(config):
+    allowed_region = create_binary_mask(config['mask_size'], config['forbidden_region'])
+    forbidden_region = ~allowed_region
+
+    for i, (count, x_dist, y_dist) in enumerate(zip(config['cell_counts'], config['x_distributions'], config['y_distributions'])):
+        result = simulate_cell_distribution(
+            x_distribution=x_dist,
+            y_distribution=y_dist,
+            cell_count=count,
+            allowed_region=allowed_region,
+            cell_interaction_radius=config['cell_interaction_radius'],
+            forbidden_region=forbidden_region,
+            cell_radius=config['min_distance'] / 2,
+            show_plots=config['show_plots']
+        )
+        print(f"Results for cell type {i}:")
+        print(f"Pixels covered by 0 cells: {result[0]}")
+        print(f"Pixels covered by 1 cell: {result[1]}")
+        print(f"Pixels covered by 2 or more cells: {result[2]}")
+        print(f"Total pixels: {result[3]}")
+        print(f"Pixels covered by 2 or more cells (not in forbidden area): {result[4]}")
+        print(f"Total pixels (not in forbidden area): {result[5]}")
     
     cell_data = generate_cell_centers(
-        CONFIG['cell_counts'],
-        CONFIG['x_distributions'],
-        CONFIG['y_distributions'],
-        binary_mask,
-        CONFIG['interaction_matrix'],
-        CONFIG['min_distance']
+        config['cell_counts'],
+        config['x_distributions'],
+        config['y_distributions'],
+        allowed_region,
+        config['interaction_matrix'],
+        config['min_distance']
     )
 
     if cell_data.size == 0:
@@ -180,20 +264,20 @@ def run_simulation():
     cell_centers = cell_data[:, :2]
     cell_types = cell_data[:, 2].astype(int)
 
-    estimated_interaction = estimate_interaction(cell_centers, cell_types, CONFIG['interaction_matrix'])
+    estimated_interaction = estimate_interaction(cell_centers, cell_types, config['interaction_matrix'])
     overlap_matrix = calculate_overlap(cell_centers, cell_types)
 
     print("Original interaction matrix:")
-    print(CONFIG['interaction_matrix'])
+    print(config['interaction_matrix'])
     print("\nEstimated interaction matrix:")
     print(estimated_interaction)
     print("\nOverlap matrix:")
     print(overlap_matrix)
 
-    plot_results(binary_mask, cell_centers, cell_types)
-    
+    plot_results(allowed_region, cell_centers, cell_types)
+
 def plot_results(binary_mask: np.ndarray, cell_centers: np.ndarray, cell_types: np.ndarray):
-    plt.figure(figsize=CONFIG['plot_size'])
+    plt.figure(figsize=(10, 10))
     plt.imshow(binary_mask, extent=[0, 1, 0, 1], alpha=0.3, cmap='gray_r')
     plt.scatter(cell_centers[cell_types == 0, 0], cell_centers[cell_types == 0, 1], alpha=0.6, label='Type 1')
     plt.scatter(cell_centers[cell_types == 1, 0], cell_centers[cell_types == 1, 1], alpha=0.6, label='Type 2')
@@ -208,5 +292,5 @@ def plot_results(binary_mask: np.ndarray, cell_centers: np.ndarray, cell_types: 
     plt.show()
 
 if __name__ == "__main__":
-    run_simulation()
-
+    from config import CONFIG
+    run_simulation(CONFIG)
