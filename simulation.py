@@ -160,22 +160,35 @@ def simulate_cell_distribution(
     grid_size = allowed_region.shape[0]
     cells = []
     
-    # Generate cells
-    while len(cells) < cell_count:
-        x = x_distribution.rvs()
-        y = y_distribution.rvs()
+    # Generate all cells at once
+    x_values = x_distribution.rvs(size=cell_count * 10)  # Generate extra to account for rejected values
+    y_values = y_distribution.rvs(size=cell_count * 10)
+    
+    # Rescale values to [0, 1] range
+    x_values = (x_values - np.min(x_values)) / (np.max(x_values) - np.min(x_values))
+    y_values = (y_values - np.min(y_values)) / (np.max(y_values) - np.min(y_values))
+    
+    # Create cell placement mask (including cell_radius if provided)
+    cell_placement_mask = allowed_region.copy()
+    if forbidden_region is not None:
+        cell_placement_mask &= ~forbidden_region
+    
+    for i in range(len(x_values)):
+        if len(cells) >= cell_count:
+            break
         
-        # Ensure x and y are within [0, 1] range
-        x = np.clip(x, 0, 1)
-        y = np.clip(y, 0, 1)
-        
-        # Convert to grid indices
+        x, y = x_values[i], y_values[i]
         x_idx = min(int(x * grid_size), grid_size - 1)
         y_idx = min(int(y * grid_size), grid_size - 1)
         
-        if allowed_region[y_idx, x_idx] and (forbidden_region is None or not forbidden_region[y_idx, x_idx]):
-            if cell_radius is None or not any(np.hypot(x - cx, y - cy) < cell_radius for cx, cy in cells):
+        if cell_placement_mask[y_idx, x_idx]:
+            if cell_radius is None or not any(np.hypot(x - cx, y - cy) < 2 * cell_radius for cx, cy in cells):
                 cells.append((x, y))
+                
+                # Update cell_placement_mask if cell_radius is provided
+                if cell_radius is not None:
+                    cell_mask = create_circular_mask(grid_size, 2 * cell_radius, (x, y))
+                    cell_placement_mask &= ~cell_mask
     
     cells = np.array(cells)
     
@@ -196,6 +209,13 @@ def simulate_cell_distribution(
     pixels_covered_1 = np.sum(interaction_map == 1)
     pixels_covered_2_plus = np.sum(interaction_map >= 2)
     total_pixels = np.sum(allowed_region)
+    
+    # Subtract cell_radius area from available pixels if provided
+    if cell_radius is not None:
+        cell_area = np.pi * (cell_radius * grid_size) ** 2
+        total_pixels -= int(cell_area * len(cells))
+        pixels_covered_0 -= int(cell_area * len(cells))
+    
     pixels_covered_2_plus_not_forbidden = pixels_covered_2_plus
     
     # Plotting
@@ -225,6 +245,13 @@ def simulate_cell_distribution(
         pixels_covered_2_plus_not_forbidden,
         total_pixels
     )
+
+def create_circular_mask(size, radius, center):
+    Y, X = np.ogrid[:size, :size]
+    dist_from_center = np.sqrt((X - center[0]*size)**2 + (Y - center[1]*size)**2)
+    mask = dist_from_center <= radius*size
+    return mask
+
 def run_simulation(config):
     allowed_region = create_binary_mask(config['mask_size'], config['forbidden_region'])
     forbidden_region = ~allowed_region
@@ -294,3 +321,4 @@ def plot_results(binary_mask: np.ndarray, cell_centers: np.ndarray, cell_types: 
 if __name__ == "__main__":
     from config import CONFIG
     run_simulation(CONFIG)
+
