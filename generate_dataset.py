@@ -25,14 +25,14 @@ def simulate_cell_distribution(
     cells = []
     
     # Generate all cells at once
-    x_values = x_distribution.rvs(size=cell_count * 10)  # Generate extra to account for rejected values
+    x_values = x_distribution.rvs(size=cell_count * 10)
     y_values = y_distribution.rvs(size=cell_count * 10)
     
     # Rescale values to [0, 1] range
     x_values = (x_values - np.min(x_values)) / (np.max(x_values) - np.min(x_values))
     y_values = (y_values - np.min(y_values)) / (np.max(y_values) - np.min(y_values))
     
-    # Create cell placement mask (including cell_radius if provided)
+    # Create cell placement mask
     cell_placement_mask = allowed_region.copy()
     if forbidden_region is not None:
         cell_placement_mask &= ~forbidden_region
@@ -71,19 +71,30 @@ def simulate_cell_distribution(
     # Apply allowed region mask
     if forbidden_region is not None:
         allowed_region = allowed_region & ~forbidden_region
-    interaction_map *= allowed_region
     
     # Calculate statistics
-    pixels_covered_0 = np.sum(interaction_map == 0)
-    pixels_covered_1 = np.sum(interaction_map == 1)
-    pixels_covered_2_plus = np.sum(interaction_map >= 2)
     total_pixels = np.sum(allowed_region)
     
-    # Subtract cell_radius area from available pixels if provided
     if cell_radius is not None:
-        cell_area = np.pi * (cell_radius * grid_size) ** 2
-        total_pixels -= int(cell_area * len(cells))
-        pixels_covered_0 -= int(cell_area * len(cells))
+        # Create a mask of all cell areas
+        cell_area_mask = np.zeros_like(allowed_region, dtype=bool)
+        for cell in cells:
+            cell_mask = create_circular_region(grid_size, int(cell_radius * grid_size))
+            cell_center = (int(cell[1] * grid_size), int(cell[0] * grid_size))
+            y_start = max(0, cell_center[0] - cell_mask.shape[0]//2)
+            y_end = min(grid_size, cell_center[0] + cell_mask.shape[0]//2)
+            x_start = max(0, cell_center[1] - cell_mask.shape[1]//2)
+            x_end = min(grid_size, cell_center[1] + cell_mask.shape[1]//2)
+            cell_area_mask[y_start:y_end, x_start:x_end] |= cell_mask[:y_end-y_start, :x_end-x_start]
+        
+        # Subtract cell areas from total pixels and apply to interaction map
+        total_pixels -= np.sum(cell_area_mask & allowed_region)
+        interaction_map[cell_area_mask] = 0
+    
+    # Calculate pixel coverages
+    pixels_covered_0 = np.sum((interaction_map == 0) & allowed_region)
+    pixels_covered_1 = np.sum((interaction_map == 1) & allowed_region)
+    pixels_covered_2_plus = np.sum((interaction_map >= 2) & allowed_region)
     
     pixels_covered_2_plus_not_forbidden = pixels_covered_2_plus
     
@@ -233,15 +244,21 @@ def generate_structured_dataset() -> pd.DataFrame:
     
     return pd.DataFrame(data)
 
-# Generate the dataset
+# Generate the new dataset
 df = generate_structured_dataset()
 
 # Save to CSV
 df.to_csv('structured_simulation_dataset_1000_cells.csv', index=False)
 
-print("Structured dataset generated and saved to 'structured_simulation_dataset_1000_cells.csv'")
+print("structured dataset generated and saved to 'structured_simulation_dataset_1000_cells.csv'")
 print(f"Total number of simulations: {len(df)}")
 
-# Optionally, you can display the first few rows of the dataset
-print("\nFirst few rows of the dataset:")
+# Display the first few rows of the dataset
+print("\nFirst few rows of the corrected dataset:")
 print(df.head())
+
+# Check for any negative values in pixels_covered_0
+if (df['pixels_covered_0'] < 0).any():
+    print("\nWarning: Negative values found in pixels_covered_0")
+else:
+    print("\nNo negative values found in pixels_covered_0")
