@@ -11,6 +11,16 @@ def create_circular_region(size: int, radius: int) -> np.ndarray:
     dist_from_center = np.sqrt((x - center)**2 + (y - center)**2)
     return dist_from_center <= radius
 
+def update_placement_mask(mask: np.ndarray, x: float, y: float, cell_radius: float, grid_size: int):
+    """Update the placement mask after placing a cell."""
+    cell_mask = create_circular_region(grid_size, int(2 * cell_radius * grid_size))
+    cell_center = (int(y * grid_size), int(x * grid_size))
+    y_start = max(0, cell_center[0] - cell_mask.shape[0]//2)
+    y_end = min(grid_size, cell_center[0] + cell_mask.shape[0]//2)
+    x_start = max(0, cell_center[1] - cell_mask.shape[1]//2)
+    x_end = min(grid_size, cell_center[1] + cell_mask.shape[1]//2)
+    mask[y_start:y_end, x_start:x_end] &= ~cell_mask[:y_end-y_start, :x_end-x_start]
+
 def simulate_cell_distribution(
     x_distribution,
     y_distribution,
@@ -51,15 +61,8 @@ def simulate_cell_distribution(
         if cell_placement_mask[y_idx, x_idx]:
             if cell_radius is None or not any(np.hypot(x - cx, y - cy) < 2 * cell_radius for cx, cy in cells):
                 cells.append((x, y))
-                
                 if cell_radius is not None:
-                    cell_mask = create_circular_region(grid_size, int(2 * cell_radius * grid_size))
-                    cell_center = (int(y * grid_size), int(x * grid_size))
-                    y_start = max(0, cell_center[0] - cell_mask.shape[0]//2)
-                    y_end = min(grid_size, cell_center[0] + cell_mask.shape[0]//2)
-                    x_start = max(0, cell_center[1] - cell_mask.shape[1]//2)
-                    x_end = min(grid_size, cell_center[1] + cell_mask.shape[1]//2)
-                    cell_placement_mask[y_start:y_end, x_start:x_end] &= ~cell_mask[:y_end-y_start, :x_end-x_start]
+                    update_placement_mask(cell_placement_mask, x, y, cell_radius, grid_size)
     
     cells = np.array(cells)
     
@@ -127,10 +130,8 @@ def simulate_cell_distribution(
     )
 
 def simulate_two_populations(
-    x_distribution1,
-    y_distribution1,
-    x_distribution2,
-    y_distribution2,
+    x_distribution1, y_distribution1,
+    x_distribution2, y_distribution2,
     cell_counts: Tuple[int, int],
     allowed_region: np.ndarray,
     cell_interaction_radius: float,
@@ -139,72 +140,68 @@ def simulate_two_populations(
     show_plots: bool = False
 ) -> Tuple[int, int, int, int, int]:
     """
-    Simulate cell distribution for two populations.
+    Simulate cell distribution for two populations with fair placement.
     """
     grid_size = allowed_region.shape[0]
     cells1 = []
     cells2 = []
+    
+    # Generate all potential cell positions for both populations
+    total_cells = cell_counts[0] + cell_counts[1]
+    all_x_values = np.concatenate([
+        x_distribution1.rvs(size=cell_counts[0] * 10),
+        x_distribution2.rvs(size=cell_counts[1] * 10)
+    ])
+    all_y_values = np.concatenate([
+        y_distribution1.rvs(size=cell_counts[0] * 10),
+        y_distribution2.rvs(size=cell_counts[1] * 10)
+    ])
+    
+    # Create population assignments (1 or 2)
+    pop_assignments = np.concatenate([
+        np.ones(cell_counts[0] * 10),
+        np.ones(cell_counts[1] * 10) * 2
+    ])
+    
+    # Shuffle all arrays together
+    shuffle_idx = np.random.permutation(len(all_x_values))
+    all_x_values = all_x_values[shuffle_idx]
+    all_y_values = all_y_values[shuffle_idx]
+    pop_assignments = pop_assignments[shuffle_idx]
+    
+    # Normalize coordinates
+    all_x_values = (all_x_values - np.min(all_x_values)) / (np.max(all_x_values) - np.min(all_x_values))
+    all_y_values = (all_y_values - np.min(all_y_values)) / (np.max(all_y_values) - np.min(all_y_values))
     
     # Create cell placement mask
     cell_placement_mask = allowed_region.copy()
     if forbidden_region is not None:
         cell_placement_mask &= ~forbidden_region
     
-    # Generate cells for population 1
-    x_values = x_distribution1.rvs(size=cell_counts[0] * 10)
-    y_values = y_distribution1.rvs(size=cell_counts[0] * 10)
-    x_values = (x_values - np.min(x_values)) / (np.max(x_values) - np.min(x_values))
-    y_values = (y_values - np.min(y_values)) / (np.max(y_values) - np.min(y_values))
-    
-    for i in range(len(x_values)):
-        if len(cells1) >= cell_counts[0]:
+    # Place cells for both populations simultaneously
+    for i in range(len(all_x_values)):
+        if len(cells1) >= cell_counts[0] and len(cells2) >= cell_counts[1]:
             break
-        
-        x, y = x_values[i], y_values[i]
+            
+        x, y = all_x_values[i], all_y_values[i]
         x_idx = min(int(x * grid_size), grid_size - 1)
         y_idx = min(int(y * grid_size), grid_size - 1)
         
         if cell_placement_mask[y_idx, x_idx]:
-            if cell_radius is None or not any(np.hypot(x - cx, y - cy) < 2 * cell_radius 
-                                            for cx, cy in cells1 + cells2):
-                cells1.append((x, y))
-                
-                if cell_radius is not None:
-                    cell_mask = create_circular_region(grid_size, int(2 * cell_radius * grid_size))
-                    cell_center = (int(y * grid_size), int(x * grid_size))
-                    y_start = max(0, cell_center[0] - cell_mask.shape[0]//2)
-                    y_end = min(grid_size, cell_center[0] + cell_mask.shape[0]//2)
-                    x_start = max(0, cell_center[1] - cell_mask.shape[1]//2)
-                    x_end = min(grid_size, cell_center[1] + cell_mask.shape[1]//2)
-                    cell_placement_mask[y_start:y_end, x_start:x_end] &= ~cell_mask[:y_end-y_start, :x_end-x_start]
-    
-    # Generate cells for population 2
-    x_values = x_distribution2.rvs(size=cell_counts[1] * 10)
-    y_values = y_distribution2.rvs(size=cell_counts[1] * 10)
-    x_values = (x_values - np.min(x_values)) / (np.max(x_values) - np.min(x_values))
-    y_values = (y_values - np.min(y_values)) / (np.max(y_values) - np.min(y_values))
-    
-    for i in range(len(x_values)):
-        if len(cells2) >= cell_counts[1]:
-            break
-        
-        x, y = x_values[i], y_values[i]
-        x_idx = min(int(x * grid_size), grid_size - 1)
-        y_idx = min(int(y * grid_size), grid_size - 1)
-        
-        if cell_placement_mask[y_idx, x_idx]:
-            if cell_radius is None or not any(np.hypot(x - cx, y - cy) < 2 * cell_radius 
-                                            for cx, cy in cells1 + cells2):
-                cells2.append((x, y))
-                
-                if cell_radius is not None:
-                    cell_mask = create_circular_region(grid_size, int(2 * cell_radius * grid_size))
-                    cell_center = (int(y * grid_size), int(x * grid_size))
-                    y_start = max(0, cell_center[0] - cell_mask.shape[0]//2)
-                    y_end = min(grid_size, cell_center[0] + cell_mask.shape[0]//2)
-                    x_start = max(0, cell_center[1] - cell_mask.shape[1]//2)
-                    x_end = min(grid_size, cell_center[1] + cell_mask.shape[1]//2)
-                    cell_placement_mask[y_start:y_end, x_start:x_end] &= ~cell_mask[:y_end-y_start, :x_end-x_start]
+            population = int(pop_assignments[i])
+            if population == 1 and len(cells1) < cell_counts[0]:
+                if cell_radius is None or not any(np.hypot(x - cx, y - cy) < 2 * cell_radius 
+                                                for cx, cy in cells1 + cells2):
+                    cells1.append((x, y))
+                    if cell_radius is not None:
+                        update_placement_mask(cell_placement_mask, x, y, cell_radius, grid_size)
+                        
+            elif population == 2 and len(cells2) < cell_counts[1]:
+                if cell_radius is None or not any(np.hypot(x - cx, y - cy) < 2 * cell_radius 
+                                                for cx, cy in cells1 + cells2):
+                    cells2.append((x, y))
+                    if cell_radius is not None:
+                        update_placement_mask(cell_placement_mask, x, y, cell_radius, grid_size)
     
     cells1 = np.array(cells1)
     cells2 = np.array(cells2)
