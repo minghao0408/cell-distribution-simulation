@@ -161,8 +161,8 @@ def simulate_two_pop_distribution(
         'total_pixels': result[4]
     }
 
-def generate_datasets():
-    """Generate both single and two population datasets."""
+def generate_datasets(n_repeats: int = 5):
+    """Generate both single and two population datasets with multiple repeats for statistical analysis."""
     # Parameters for single population
     single_pop_variations = {
         'size': [50, 100, 200],
@@ -182,19 +182,18 @@ def generate_datasets():
         'allowed_shape': ['square', 'circle'],
         'forbidden_shape': ['none', 'square', 'circle'],
         'forbidden_size': [0, 0.1, 0.2, 0.3],
-        'cell_counts': [(300, 700), (500, 500), (700, 300)],
+        'cell_counts': [(500, 500), (300, 700), (700, 300)],
         'cell_radius': [0, 0.005, 0.01, 0.02],
         'cell_interaction_radius': [0.01, 0.03, 0.05, 0.07],
         'distribution_type': ['normal'],
         'dist_params': [
-            ((0.3, 0.1), (0.7, 0.1)),  # Different means
             ((0.5, 0.1), (0.5, 0.1)),  # Same parameters
+            ((0.3, 0.1), (0.7, 0.1)),  # Different means
             ((0.5, 0.05), (0.5, 0.2))   # Different spreads
         ]
     }
     
-    # Generate single population dataset
-    single_pop_data = []
+    # Base parameters
     base_params_single = {
         'size': 100,
         'allowed_shape': 'square',
@@ -207,22 +206,6 @@ def generate_datasets():
         'dist_params': (0.5, 0.1)
     }
     
-    print("Generating single population dataset...")
-    for param, values in single_pop_variations.items():
-        for value in values:
-            current_params = base_params_single.copy()
-            current_params[param] = value
-            
-            # Adjust cell_interaction_radius if cell_radius is changed
-            if param == 'cell_radius':
-                current_params['cell_interaction_radius'] = max(base_params_single['cell_interaction_radius'], value * 2)
-            
-            result = simulate_single_distribution(**current_params, show_plots=False)
-            result['varied_parameter'] = param
-            single_pop_data.append(result)
-    
-    # Generate two population dataset
-    two_pop_data = []
     base_params_two = {
         'size': 100,
         'allowed_shape': 'square',
@@ -236,6 +219,30 @@ def generate_datasets():
         'dist_params_pop2': (0.5, 0.1)
     }
     
+    single_pop_data = []
+    two_pop_data = []
+    
+    # Generate single population dataset
+    print("Generating single population dataset...")
+    for param, values in single_pop_variations.items():
+        for value in values:
+            current_params = base_params_single.copy()
+            current_params[param] = value
+            
+            # Repeat simulations for statistical analysis
+            for repeat in range(n_repeats):
+                if param == 'cell_radius':
+                    current_params['cell_interaction_radius'] = max(
+                        base_params_single['cell_interaction_radius'], 
+                        value * 2
+                    )
+                
+                result = simulate_single_distribution(**current_params, show_plots=False)
+                result['varied_parameter'] = param
+                result['repeat'] = repeat
+                single_pop_data.append(result)
+    
+    # Generate two population dataset
     print("Generating two population dataset...")
     for param, values in two_pop_variations.items():
         for value in values:
@@ -249,13 +256,18 @@ def generate_datasets():
             else:
                 current_params[param] = value
             
-            # Adjust cell_interaction_radius if cell_radius is changed
-            if param == 'cell_radius':
-                current_params['cell_interaction_radius'] = max(base_params_two['cell_interaction_radius'], value * 2)
-            
-            result = simulate_two_pop_distribution(**current_params, show_plots=False)
-            result['varied_parameter'] = param
-            two_pop_data.append(result)
+            # Repeat simulations for statistical analysis
+            for repeat in range(n_repeats):
+                if param == 'cell_radius':
+                    current_params['cell_interaction_radius'] = max(
+                        base_params_two['cell_interaction_radius'], 
+                        value * 2
+                    )
+                
+                result = simulate_two_pop_distribution(**current_params, show_plots=False)
+                result['varied_parameter'] = param
+                result['repeat'] = repeat
+                two_pop_data.append(result)
     
     # Create DataFrames and save to CSV
     df_single = pd.DataFrame(single_pop_data)
@@ -267,7 +279,23 @@ def generate_datasets():
     print(f"Generated {len(df_single)} simulations for single population")
     print(f"Generated {len(df_two)} simulations for two populations")
     
+    # Perform statistical analysis for two populations
+    df_symmetric = df_two[
+        (df_two['cell_count_pop1'] == df_two['cell_count_pop2']) & 
+        (df_two['dist_params_pop1'] == df_two['dist_params_pop2'])
+    ]
+    
+    if len(df_symmetric) > 0:
+        diff_percentage = abs(
+            df_symmetric['pixels_pop1_only'] - df_symmetric['pixels_pop2_only']
+        ) / df_symmetric['total_pixels'] * 100
+        
+        print("\nStatistical analysis for symmetric cases:")
+        print(f"Mean difference percentage: {diff_percentage.mean():.2f}%")
+        print(f"Median difference percentage: {diff_percentage.median():.2f}%")
+        print(f"Standard deviation: {diff_percentage.std():.2f}%")
+    
     return df_single, df_two
 
 if __name__ == "__main__":
-    df_single, df_two = generate_datasets()
+    df_single, df_two = generate_datasets(n_repeats=5)
