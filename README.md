@@ -42,7 +42,6 @@ python generate_dataset.py
 ├── simulation.py          # Core simulation functions
 ├── generate_dataset.py    # Dataset generation and analysis
 ├── test_simulation.py     # Test suite
-└── config.py              # Configuration parameters
 ```
 
 ## Detailed Usage
